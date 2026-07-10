@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Snapfix Toolkit</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:Arial,sans-serif;background:linear-gradient(rgba(15,23,42,.85),rgba(15,23,42,.9)),url('https://images.unsplash.com/photo-1497366754035-f200968a6e72?auto=format&fit=crop&w=1600&q=80') center/cover no-repeat;color:#fff}
+.page{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
+.login-card{max-width:420px;width:100%;padding:40px;background:rgba(15,23,42,.8);border-radius:18px;backdrop-filter:blur(10px);text-align:center;box-shadow:0 15px 40px rgba(0,0,0,.4)}
+.lock{font-size:48px;margin-bottom:15px}
+h1{margin-bottom:10px}
+.subtitle{color:#cbd5e1;margin-bottom:20px}
+input{width:100%;padding:14px;border-radius:10px;border:1px solid #475569;background:#0f172a;color:#fff;font-size:16px;margin-bottom:15px}
+button{padding:14px;border:none;border-radius:10px;background:#2563eb;color:#fff;font-size:16px;font-weight:bold;cursor:pointer}
+button:hover{background:#1d4ed8}
+.message{margin-top:15px;height:20px}
+.protected{display:none;background:#f3f6fb;color:#111827;min-height:100vh}
+.navbar{background:#0f172a;color:#fff;padding:16px 30px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap}
+.logo{font-size:22px;font-weight:bold}
+.nav-links{list-style:none;display:flex;gap:12px;flex-wrap:wrap}
+.nav-links a{text-decoration:none;color:#fff;padding:10px 14px;border-radius:8px}
+.nav-links a:hover{background:#2563eb}
+.logout{background:#dc2626}
+.logout:hover{background:#b91c1c}
+.content{max-width:1200px;margin:50px auto;padding:20px;text-align:center}
+.content h2{font-size:40px;margin-bottom:10px}
+.content p{color:#64748b;margin-bottom:35px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:20px}
+.card{display:block;text-decoration:none;background:#fff;color:#111827;padding:28px;border-radius:14px;box-shadow:0 6px 18px rgba(0,0,0,.08);transition:.2s}
+.card:hover{transform:translateY(-5px)}
+.card h3{margin-bottom:10px}
+.card p{color:#64748b;margin:0}
+</style>
+</head>
+<body>
+
+<div id="login" class="page">
+<div class="login-card">
+<div class="lock">🔒</div>
+<h1>Snapfix Toolkit</h1>
+<p class="subtitle">Enter the password to continue.</p>
+<form id="form">
+<input id="pwd" type="password" placeholder="Password" required>
+<button type="submit">Enter</button>
+<div id="msg" class="message"></div>
+</form>
+</div>
+</div>
+
+<div id="protected" class="protected">
+<nav class="navbar">
+<div class="logo">🛠️ Snapfix Toolkit</div>
+<ul class="nav-links">
+<li><a href="aging.html">Aging</a></li>
+<li><a href="agingv2.html">Aging V2</a></li>
+<li><a href="search.html">Search</a></li>
+<li><a href="searchv2.html">Search V2</a></li>
+<li><a href="searchv3.html">Search V3</a></li>
+<li><a href="snapfix-viewer.html">Viewer</a></li>
+</ul>
+<button id="logout" class="logout">Logout</button>
+</nav>
+
+<div class="content">
+<h2>Welcome</h2>
+<p>Select a tool below or use the navigation bar.</p>
+<div class="cards">
+<a class="card" href="aging.html"><h3>📈 Aging Dashboard</h3><p>Original aging dashboard.</p></a>
+<a class="card" href="agingv2.html"><h3>📊 Aging Dashboard V2</h3><p>Enhanced dashboard.</p></a>
+<a class="card" href="search.html"><h3>🔍 Search</h3><p>Task search.</p></a>
+<a class="card" href="searchv2.html"><h3>🔎 Search V2</h3><p>Improved search.</p></a>
+<a class="card" href="searchv3.html"><h3>🚀 Search V3</h3><p>Latest search.</p></a>
+<a class="card" href="snapfix-viewer.html"><h3>🖼️ Snapfix Viewer</h3><p>View work orders.</p></a>
+</div>
+</div>
+</div>
+
+<script>
+const PASSWORD="YOUR_PASSWORD";
+const login=document.getElementById("login");
+const prot=document.getElementById("protected");
+function show(){login.style.display="none";prot.style.display="block";}
+function hide(){prot.style.display="none";login.style.display="flex";}
+if(sessionStorage.getItem("auth")==="true")show();
+document.getElementById("form").addEventListener("submit",e=>{
+e.preventDefault();
+if(document.getElementById("pwd").value===PASSWORD){
+sessionStorage.setItem("auth","true");show();
+}else{
+document.getElementById("msg").textContent="Incorrect password.";
+}
+});
+document.getElementById("logout").onclick=()=>{sessionStorage.removeItem("auth");hide();};
+</script>
+</body>
+</html>
