@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Snapfix Aging Dashboard</title>
+  <style>
+    body { font-family: Arial, sans-serif; background: #f4f6f8; padding: 30px; }
+    .container { max-width: 1400px; margin: auto; }
+    h1 { margin-bottom: 5px; }
+    .subtitle { color: #666; margin-bottom: 20px; }
+    .controls, .summary, .table-card, .message {
+      background: white; padding: 20px; border-radius: 12px;
+      box-shadow: 0 2px 8px rgba(0,0,0,.08); margin-bottom: 20px;
+    }
+    button {
+      background: #111827; color: white; border: none;
+      padding: 12px 20px; border-radius: 8px; cursor: pointer;
+    }
+    select { padding: 12px; border-radius: 8px; border: 1px solid #ccc; margin-left: 10px; }
+    .summary-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; }
+    .stat { padding: 16px; border-radius: 10px; background: #f9fafb; text-align: center; }
+    .stat-number { font-size: 28px; font-weight: bold; }
+    .stat-label { color: #666; font-size: 13px; }
+    table { width: 100%; border-collapse: collapse; }
+    th { background: #111827; color: white; padding: 12px; text-align: left; }
+    td { padding: 12px; border-bottom: 1px solid #eee; font-size: 14px; vertical-align: top; }
+    .badge { padding: 6px 10px; border-radius: 999px; font-size: 12px; font-weight: bold; display: inline-block; }
+    .red { background: #fee2e2; color: #991b1b; }
+    .amber { background: #fef3c7; color: #92400e; }
+    .age-low { background: #dcfce7; color: #166534; }
+    .age-mid { background: #fef3c7; color: #92400e; }
+    .age-high { background: #ffedd5; color: #9a3412; }
+    .age-critical { background: #fee2e2; color: #991b1b; }
+    .comment { max-width: 360px; line-height: 1.4; color: #333; }
+  </style>
+</head>
+
+<body>
+<div class="container">
+  <h1>Snapfix Aging Work Order Dashboard</h1>
+  <div class="subtitle">Open work orders grouped by age, with latest comments.</div>
+
+  <div class="controls">
+    <button onclick="loadAgingDashboard()">Load Aging Dashboard</button>
+    <select id="ageFilter" onchange="renderTable()">
+      <option value="all">All Open Work Orders</option>
+      <option value="0-7">0-7 Days</option>
+      <option value="8-30">8-30 Days</option>
+      <option value="31-60">31-60 Days</option>
+      <option value="61-90">61-90 Days</option>
+      <option value="90+">90+ Days</option>
+    </select>
+  </div>
+
+  <div id="summary"></div>
+  <div id="results"></div>
+</div>
+
+<script>
+const SNAPFIX_TOKEN = "";
+
+const TASKS_URL =
+  "https://z4.snapfix.com/v1/app/tasks/list?businessUuid=500cd894-4cdc-4fd0-8c20-5524f668ff73&limit=500&offset=1&sortBy=lastActivity&orderBy=desc";
+
+const COMMENT_URL =
+  "https://z4.snapfix.com/v1/app/chat/list?limit=20&offset=1";
+
+const COMMON_HEADERS = {
+  "accept": "application/json, text/plain, */*",
+  "authorization": SNAPFIX_TOKEN,
+  "content-type": "application/json",
+  "parent-uuid": "33c9bb00-81bc-4313-9fe1-c2f0a68b2e7f"
+};
+
+let agingJobs = [];
+
+const OPEN_COLORS = [
+  { value: "red", label: "New", css: "red" },
+  { value: "amber", label: "In Progress", css: "amber" }
+];
+
+async function fetchJobs(color) {
+  const response = await fetch(TASKS_URL, {
+    method: "POST",
+    headers: COMMON_HEADERS,
+    body: JSON.stringify({ color, normalTasks: 1 })
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(response.status + " - " + errorText);
+  }
+
+  const data = await response.json();
+  return data?.data?.jobs || [];
+}
+
+async function getLatestComment(jobUuid) {
+  try {
+    const response = await fetch(COMMENT_URL, {
+      method: "POST",
+      headers: COMMON_HEADERS,
+      body: JSON.stringify({
+        jobUuid: jobUuid,
+        chatItemTypes: []
+      })
+    });
+
+    if (!response.ok) return "-";
+
+    const data = await response.json();
+    const items = data?.data?.items || [];
+
+    const latest = items.find(item =>
+      item.text &&
+      item.text.trim() !== "" &&
+      item.user &&
+      item.user.name
+    );
+
+    if (!latest) return "-";
+
+    const cleanText = latest.text.replace(/<[^>]*>/g, "").trim();
+
+    return `${latest.user.name}: "${cleanText}"`;
+
+  } catch (error) {
+    console.error("Comment error for", jobUuid, error);
+    return "-";
+  }
+}
+
+function getCreatedDate(job) {
+  const timestamp =
+    job.createdTs ||
+    job.createdAt ||
+    job.created ||
+    job.createdDate ||
+    job.createdTime;
+
+  if (!timestamp) return null;
+
+  if (typeof timestamp === "number") {
+    return new Date(timestamp);
+  }
+
+  return new Date(timestamp);
+}
+
+function getAgeDays(job) {
+  const createdDate = getCreatedDate(job);
+  if (!createdDate || isNaN(createdDate.getTime())) return null;
+
+  const today = new Date();
+  return Math.floor((today - createdDate) / (1000 * 60 * 60 * 24));
+}
+
+function getAgeBucket(days) {
+  if (days === null) return "Unknown";
+  if (days <= 7) return "0-7";
+  if (days <= 30) return "8-30";
+  if (days <= 60) return "31-60";
+  if (days <= 90) return "61-90";
+  return "90+";
+}
+
+function getAgeClass(days) {
+  if (days === null) return "notfound";
+  if (days <= 7) return "age-low";
+  if (days <= 30) return "age-mid";
+  if (days <= 60) return "age-high";
+  return "age-critical";
+}
+
+async function loadAgingDashboard() {
+  document.getElementById("summary").innerHTML = "";
+  document.getElementById("results").innerHTML =
+    `<div class="message">Loading open work orders and latest comments...</div>`;
+
+  try {
+    agingJobs = [];
+
+    for (const color of OPEN_COLORS) {
+      const jobs = await fetchJobs(color.value);
+
+      for (const job of jobs) {
+        const ageDays = getAgeDays(job);
+        const latestComment = await getLatestComment(job.uuid);
+
+        agingJobs.push({
+          ...job,
+          statusLabel: color.label,
+          statusCss: color.css,
+          ageDays,
+          ageBucket: getAgeBucket(ageDays),
+          latestComment
+        });
+      }
+    }
+
+    agingJobs.sort((a, b) => (b.ageDays || 0) - (a.ageDays || 0));
+
+    renderSummary();
+    renderTable();
+
+  } catch (error) {
+    console.error(error);
+    document.getElementById("results").innerHTML =
+      `<div class="message">Error: ${error.message}</div>`;
+  }
+}
+
+function renderSummary() {
+  const counts = { "0-7": 0, "8-30": 0, "31-60": 0, "61-90": 0, "90+": 0 };
+
+  agingJobs.forEach(job => {
+    if (counts[job.ageBucket] !== undefined) counts[job.ageBucket]++;
+  });
+
+  document.getElementById("summary").innerHTML = `
+    <div class="summary">
+      <div class="summary-grid">
+        <div class="stat"><div class="stat-number">${counts["0-7"]}</div><div class="stat-label">0-7 Days</div></div>
+        <div class="stat"><div class="stat-number">${counts["8-30"]}</div><div class="stat-label">8-30 Days</div></div>
+        <div class="stat"><div class="stat-number">${counts["31-60"]}</div><div class="stat-label">31-60 Days</div></div>
+        <div class="stat"><div class="stat-number">${counts["61-90"]}</div><div class="stat-label">61-90 Days</div></div>
+        <div class="stat"><div class="stat-number">${counts["90+"]}</div><div class="stat-label">90+ Days</div></div>
+      </div>
+    </div>
+  `;
+}
+
+function renderTable() {
+  const filter = document.getElementById("ageFilter").value;
+  let filteredJobs = agingJobs;
+
+  if (filter !== "all") {
+    filteredJobs = agingJobs.filter(job => job.ageBucket === filter);
+  }
+
+  if (filteredJobs.length === 0) {
+    document.getElementById("results").innerHTML =
+      `<div class="message">No work orders found for this filter.</div>`;
+    return;
+  }
+
+  let rows = "";
+
+  filteredJobs.forEach(job => {
+    const createdDate = getCreatedDate(job);
+    const createdDisplay =
+      createdDate && !isNaN(createdDate.getTime())
+        ? createdDate.toLocaleDateString()
+        : "-";
+
+    rows += `
+      <tr>
+        <td>${job.reference || "-"}</td>
+        <td>${job.title || "-"}</td>
+        <td>${job.largeTitle || "-"}</td>
+        <td><span class="badge ${job.statusCss}">${job.statusLabel}</span></td>
+        <td>${createdDisplay}</td>
+        <td><span class="badge ${getAgeClass(job.ageDays)}">${job.ageDays !== null ? job.ageDays + " days" : "Unknown"}</span></td>
+        <td class="comment">${job.latestComment || "-"}</td>
+      </tr>
+    `;
+  });
+
+  document.getElementById("results").innerHTML = `
+    <div class="table-card">
+      <table>
+        <thead>
+          <tr>
+            <th>Task #</th>
+            <th>Location</th>
+            <th>Work Order</th>
+            <th>Status</th>
+            <th>Created</th>
+            <th>Age</th>
+            <th>Latest Comment</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  `;
+}
+</script>
+</body>
+</html>
