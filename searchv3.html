@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Snapfix Task Search</title>
+  <style>
+    body { font-family: Arial, sans-serif; background: #f4f6f8; padding: 30px; }
+    .container { max-width: 1400px; margin: auto; }
+    h1 { margin-bottom: 5px; }
+    .subtitle { color: #666; margin-bottom: 20px; }
+    .card, .loading { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,.08); margin-bottom: 20px; }
+    textarea { width: 100%; height: 180px; border: 1px solid #ccc; border-radius: 8px; padding: 12px; box-sizing: border-box; font-size: 14px; }
+    button { margin-top: 12px; background: #111827; color: white; border: none; border-radius: 8px; padding: 12px 20px; cursor: pointer; font-size: 15px; }
+    .photo-btn { background: #2563eb; margin-left: 10px; }
+    .comment-btn { background: #059669; margin-left: 10px; }
+    .small-btn { padding: 7px 12px; font-size: 12px; margin-top: 0; }
+
+    table { width: 100%; border-collapse: collapse; background: white; border-radius: 12px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,.08); }
+    th { background: #111827; color: white; padding: 12px; text-align: left; }
+    td { padding: 12px; border-bottom: 1px solid #eee; vertical-align: top; }
+
+    tbody tr:nth-child(odd) { background: #f3f4f6; }
+    tbody tr:nth-child(even) { background: #e5e7eb; }
+    tbody tr:hover { background: #dbeafe; }
+
+    .badge { padding: 6px 12px; border-radius: 999px; font-size: 12px; font-weight: bold; display: inline-block; }
+    .red { background: #fee2e2; color: #991b1b; }
+    .amber { background: #fef3c7; color: #92400e; }
+    .green { background: #dcfce7; color: #166534; }
+    .notfound { background: #e5e7eb; color: #374151; }
+    .stats { margin-bottom: 15px; color: #555; font-weight: bold; }
+    .thumb { width: 75px; height: 75px; object-fit: cover; border-radius: 8px; margin: 4px; border: 1px solid #ddd; }
+    .photos { min-width: 170px; }
+    .comment { max-width: 380px; line-height: 1.4; color: #333; }
+  </style>
+</head>
+
+<body>
+<div class="container">
+  <h1>Snapfix Task Search</h1>
+  <div class="subtitle">Search by task number, location, SN number, or text.</div>
+
+  <div class="card">
+    <textarea id="taskSearch" placeholder="SN813&#10;90014062&#10;Bathroom leak"></textarea>
+    <button onclick="searchTasks()">Search Tasks</button>
+    <button class="photo-btn" onclick="loadPhotos()">Load Photos</button>
+    <button class="comment-btn" onclick="loadCommentsForVisibleRows()">Load Comments for Visible Rows</button>
+  </div>
+
+  <div id="results"></div>
+</div>
+
+<script>
+const SNAPFIX_TOKEN = "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6MCwiaWF0IjoxNzg2NTQwNjgwLCJqdGkiOiI3MGQxYjUxNi03N2Y0LTRkZDktYjFiNi0wMjFhOWQwYTI5YzUiLCJ0eXBlIjoiYWNjZXNzIiwiaWRlbnRpdHkiOiJiNjU5Yjg5NS04ZGMxLWNkZmMtZDM3OS1hMTc3ZGJkOTJhZDYiLCJuYmYiOjE3ODY1NDA2ODAsImNzcmYiOiI2NjRlNTIyYS0xNjRmLTRkYWMtODE2MS0yM2FmZmQ1YTE1YmIiLCJleHAiOjE3ODY1NTE0ODAsInVzZXJfY2xhaW1zIjp7ImFkbWluX3RlbXBfcGFzc3dvcmQiOjAsInN1YiI6ImI2NTliODk1LThkYzEtY2RmYy1kMzc5LWExNzdkYmQ5MmFkNiIsImxvZ2dlZF9pbl93aXRoIjoiZW1haWwiLCJoYXNfZW1haWwiOjEsImhhc19tb2JpbGUiOjAsImVtYWlsX3ZlcmlmaWVkIjoxLCJtb2JpbGVfdmVyaWZpZWQiOjAsInZlcmlmaWNhdGlvbl9yZXF1aXJlZCI6MSwidGVtcF9wYXNzd29yZCI6MCwidGVtcF9wYXNzd29yZF9yZXF1aXJlZCI6MH19.UTEAfGg267oObfrsT3t_IOxQQtOdKpzECgY-peohl7Q";
+
+const PARENT_UUID = "33c9bb00-81bc-4313-9fe1-c2f0a68b2e7f";
+
+const CHAT_URL =
+  "https://z4.snapfix.com/v1/app/chat/list?limit=20&offset=1";
+
+const COMMON_HEADERS = {
+  "accept": "application/json, text/plain, */*",
+  "authorization": SNAPFIX_TOKEN,
+  "content-type": "application/json",
+  "parent-uuid": PARENT_UUID
+};
+
+const STATUSES = [
+  { color: "red", label: "New", css: "red" },
+  { color: "amber", label: "In Progress", css: "amber" },
+  { color: "green", label: "Completed", css: "green" }
+];
+
+let displayedJobs = [];
+
+function getSearchValues() {
+  return document
+    .getElementById("taskSearch")
+    .value
+    .split(/[\n,]+/)
+    .map(x => x.trim())
+    .filter(Boolean);
+}
+
+function buildSearchUrl(limit = 100, offset = 1) {
+  return `https://z4.snapfix.com/v1/app/tasks/list-by-parent?parentUuid=${PARENT_UUID}&limit=${limit}&offset=${offset}&sortBy=lastActivity&orderBy=desc`;
+}
+
+async function searchByColor(searchText, status) {
+  const response = await fetch(buildSearchUrl(), {
+    method: "POST",
+    headers: COMMON_HEADERS,
+    body: JSON.stringify({
+      searchText: searchText,
+      normalTasks: 1,
+      colors: [status.color]
+    })
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(response.status + " - " + errorText);
+  }
+
+  const data = await response.json();
+  const jobs = data?.data?.jobs || [];
+
+  return jobs.map(job => ({
+    job,
+    statusInfo: {
+      label: status.label,
+      css: status.css
+    }
+  }));
+}
+
+async function searchAllMatches(searchText) {
+  let allMatches = [];
+
+  for (const status of STATUSES) {
+    const matches = await searchByColor(searchText, status);
+    allMatches = allMatches.concat(matches);
+  }
+
+  return allMatches;
+}
+
+async function fetchChatItems(jobUuid) {
+  const response = await fetch(CHAT_URL, {
+    method: "POST",
+    headers: COMMON_HEADERS,
+    body: JSON.stringify({
+      jobUuid: jobUuid,
+      chatItemTypes: []
+    })
+  });
+
+  if (!response.ok) return [];
+
+  const data = await response.json();
+  return data?.data?.items || [];
+}
+
+async function getLatestComment(jobUuid) {
+  try {
+    const items = await fetchChatItems(jobUuid);
+
+    const latest = items.find(item =>
+      item.text &&
+      item.text.trim() !== "" &&
+      item.user &&
+      item.user.name
+    );
+
+    if (!latest) return "-";
+
+    const cleanText = latest.text.replace(/<[^>]*>/g, "").trim();
+    return `${latest.user.name}: "${cleanText}"`;
+
+  } catch (error) {
+    console.error("Comment error:", error);
+    return "-";
+  }
+}
+
+function getPhotoUrls(items) {
+  return items
+    .filter(item => item.fileUrl)
+    .map(item => item.fileUrl);
+}
+
+function renderPhotoThumbnails(photoUrls) {
+  if (!photoUrls || photoUrls.length === 0) return "-";
+
+  return photoUrls.map((url, index) => `
+    <a href="${url}" target="_blank" title="Open Photo ${index + 1}">
+      <img class="thumb" src="${url}" alt="Photo ${index + 1}">
+    </a>
+  `).join("");
+}
+
+function clean(value) {
+  return value || "-";
+}
+
+function formatCreatedDate(timestamp) {
+  if (!timestamp) return "-";
+
+  const date = new Date(Number(timestamp));
+
+  if (isNaN(date.getTime())) return "-";
+
+  return date.toLocaleString("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "2-digit",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true
+  });
+}
+
+async function loadSinglePhoto(jobUuid) {
+  const cell = document.getElementById(`photos-${jobUuid}`);
+
+  if (!cell) return;
+
+  cell.innerHTML = "Loading...";
+
+  const chatItems = await fetchChatItems(jobUuid);
+  const photoUrls = getPhotoUrls(chatItems);
+
+  cell.innerHTML = renderPhotoThumbnails(photoUrls);
+}
+
+async function loadPhotos() {
+  if (displayedJobs.length === 0) {
+    alert("Search tasks first before loading photos.");
+    return;
+  }
+
+  await Promise.all(
+    displayedJobs.map(job => loadSinglePhoto(job.uuid))
+  );
+}
+
+async function loadSingleComment(jobUuid) {
+  const cell = document.getElementById(`comment-${jobUuid}`);
+
+  if (!cell) return;
+
+  cell.innerHTML = "Loading...";
+  cell.innerHTML = await getLatestComment(jobUuid);
+}
+
+async function loadCommentsForVisibleRows() {
+  if (displayedJobs.length === 0) {
+    alert("Search tasks first before loading comments.");
+    return;
+  }
+
+  const results = document.getElementById("results");
+  const progress = document.createElement("div");
+  progress.className = "loading";
+  results.prepend(progress);
+
+  for (let i = 0; i < displayedJobs.length; i++) {
+    progress.innerHTML = `Loading comments ${i + 1} of ${displayedJobs.length}...`;
+    await loadSingleComment(displayedJobs[i].uuid);
+  }
+
+  progress.remove();
+}
+
+async function searchTasks() {
+  const results = document.getElementById("results");
+  const searchValues = getSearchValues();
+
+  displayedJobs = [];
+
+  if (searchValues.length === 0) {
+    alert("Please enter a search value.");
+    return;
+  }
+
+  results.innerHTML = `<div class="loading">Searching Snapfix...</div>`;
+
+  try {
+    let rows = "";
+    let totalFound = 0;
+
+    for (let i = 0; i < searchValues.length; i++) {
+      const searchValue = searchValues[i];
+
+      results.innerHTML =
+        `<div class="loading">Searching ${i + 1} of ${searchValues.length}: ${searchValue}</div>`;
+
+      const matches = await searchAllMatches(searchValue);
+
+      if (matches.length > 0) {
+        totalFound += matches.length;
+
+        for (const item of matches) {
+          const match = item.job;
+          const statusInfo = item.statusInfo;
+
+          displayedJobs.push(match);
+
+          rows += `
+            <tr>
+              <td>${searchValue}</td>
+              <td>${formatCreatedDate(match.createdTs)}</td>
+              <td>${clean(match.reference)}</td>
+              <td>${clean(match.title)}</td>
+              <td>${clean(match.largeTitle)}</td>
+              <td>${clean(match.description)}</td>
+              <td><span class="badge ${statusInfo.css}">${statusInfo.label}</span></td>
+              <td class="photos" id="photos-${match.uuid}">
+                <button class="small-btn" onclick="loadSinglePhoto('${match.uuid}')">
+                  Load
+                </button>
+              </td>
+              <td class="comment" id="comment-${match.uuid}">Not loaded</td>
+            </tr>
+          `;
+        }
+      } else {
+        rows += `
+          <tr>
+            <td>${searchValue}</td>
+            <td>-</td>
+            <td colspan="5">Not Found</td>
+            <td><span class="badge notfound">Not Found</span></td>
+            <td>-</td>
+          </tr>
+        `;
+      }
+    }
+
+    results.innerHTML = `
+      <div class="stats">
+        Found ${totalFound} total result(s) for ${searchValues.length} searched value(s)
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Searched Value</th>
+            <th>Created</th>
+            <th>Reference</th>
+            <th>Location</th>
+            <th>Work Order</th>
+            <th>Description</th>
+            <th>Status</th>
+            <th>Photos</th>
+            <th>Latest Comment</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+
+  } catch (error) {
+    console.error(error);
+    results.innerHTML = `<div class="loading">Error: ${error.message}</div>`;
+  }
+}
+</script>
+</body>
+</html>
