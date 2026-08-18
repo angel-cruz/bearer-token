@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Snapfix Work Order Dispatcher</title>
+  <style>
+    body { font-family: Arial, sans-serif; background: #f4f6f8; padding: 24px; color: #111827; }
+    .container { max-width: 1700px; margin: auto; }
+    h1 { margin-bottom: 4px; }
+    .subtitle { color: #6b7280; margin-bottom: 20px; }
+    .card { background: white; padding: 18px; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,.08); margin-bottom: 18px; }
+    .controls { display: grid; grid-template-columns: repeat(6, minmax(150px, 1fr)); gap: 12px; align-items: end; }
+    label { display: block; font-size: 12px; font-weight: bold; color: #4b5563; margin-bottom: 5px; }
+    input, select { width: 100%; padding: 9px 10px; box-sizing: border-box; border: 1px solid #d1d5db; border-radius: 8px; background: white; }
+    button { background: #111827; color: white; border: none; border-radius: 8px; padding: 11px 16px; cursor: pointer; font-size: 14px; }
+    button.secondary { background: #2563eb; }
+    .stats { display: grid; grid-template-columns: repeat(5, minmax(140px, 1fr)); gap: 12px; margin-bottom: 18px; }
+    .stat { background: white; border-radius: 10px; padding: 14px; box-shadow: 0 2px 8px rgba(0,0,0,.06); }
+    .stat .value { font-size: 24px; font-weight: bold; margin-top: 4px; }
+    .stat .label { color: #6b7280; font-size: 12px; }
+    .grid-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: separate; border-spacing: 0; min-width: 1500px; background: white; border-radius: 12px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,.08); }
+    th { background: #111827; color: white; padding: 12px; text-align: left; }
+    td { border-right: 1px solid #e5e7eb; border-bottom: 1px solid #e5e7eb; vertical-align: top; padding: 10px; min-width: 235px; }
+    td.worker { min-width: 130px; max-width: 130px; font-weight: bold; background: #f9fafb; }
+    .ticket { border: 1px solid #d1d5db; border-left: 5px solid #9ca3af; border-radius: 9px; padding: 9px; margin-bottom: 8px; background: #fff; }
+    .ticket.red { border-left-color: #dc2626; background: #fef2f2; }
+    .ticket.amber { border-left-color: #d97706; background: #fffbeb; }
+    .ticket .top { display: flex; justify-content: space-between; gap: 8px; font-weight: bold; font-size: 12px; margin-bottom: 5px; }
+    .ticket .title { font-size: 12px; line-height: 1.35; margin-bottom: 5px; }
+    .ticket .meta { font-size: 11px; color: #6b7280; line-height: 1.35; }
+    .badge { display: inline-block; font-size: 10px; padding: 3px 7px; border-radius: 999px; font-weight: bold; margin-top: 5px; }
+    .badge.oldest { background: #fee2e2; color: #991b1b; }
+    .badge.newer { background: #dbeafe; color: #1d4ed8; }
+    .badge.neighbor { background: #dcfce7; color: #166534; }
+    .loading { padding: 14px; background: white; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,.06); margin-bottom: 15px; }
+    .empty { color: #9ca3af; font-size: 12px; text-align: center; padding: 20px 5px; }
+    @media (max-width: 1100px) {
+      .controls { grid-template-columns: repeat(2, 1fr); }
+      .stats { grid-template-columns: repeat(2, 1fr); }
+    }
+  </style>
+</head>
+<body>
+<div class="container">
+  <h1>Snapfix Work Order Dispatcher</h1>
+  <div class="subtitle">Prioritize aging red/yellow work orders, balance workload, and cluster nearby tickets.</div>
+
+  <div class="card">
+    <div class="controls">
+      <div>
+        <label>Old Tickets / Worker</label>
+        <select id="oldPerWorker"><option value="2">2</option><option value="3" selected>3</option></select>
+      </div>
+      <div>
+        <label>Newer Tickets / Worker</label>
+        <select id="newPerWorker"><option value="1">1</option><option value="2" selected>2</option><option value="3">3</option></select>
+      </div>
+      <div>
+        <label>Old Ticket Threshold (days)</label>
+        <input id="oldThreshold" type="number" value="30" min="1">
+      </div>
+      <div>
+        <label>Neighbor Search</label>
+        <select id="neighborMode">
+          <option value="off">Off</option>
+          <option value="address" selected>Same street / block</option>
+          <option value="geo">Coordinates if available</option>
+        </select>
+      </div>
+      <div>
+        <label>Neighbor Radius (miles)</label>
+        <input id="neighborRadius" type="number" value="0.35" min="0.05" step="0.05">
+      </div>
+      <div>
+        <button onclick="loadAndDispatch()">Load & Build Week</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="loading"></div>
+  <div id="stats"></div>
+
+  <div class="card" style="display:flex;justify-content:space-between;align-items:center;gap:12px;">
+    <div>
+      <strong>Monday-Friday Dispatch Board</strong>
+      <div style="font-size:12px;color:#6b7280;margin-top:4px;">
+        Oldest tickets first, then newer tickets, then one optional neighboring ticket.
+      </div>
+    </div>
+    <button class="secondary" onclick="redispatchCurrent()">Redispatch</button>
+  </div>
+
+  <div id="board" class="grid-wrap"></div>
+</div>
+
+<script>
+const SNAPFIX_TOKEN = "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6MCwiaWF0IjoxNzg3MDc5NDU1LCJqdGkiOiJiMzA5NzlmYy03Yzk0LTQ4MDYtYTM2MS1iMWEyNWU5YTM1OTYiLCJ0eXBlIjoiYWNjZXNzIiwiaWRlbnRpdHkiOiJiNjU5Yjg5NS04ZGMxLWNkZmMtZDM3OS1hMTc3ZGJkOTJhZDYiLCJuYmYiOjE3ODcwNzk0NTUsImNzcmYiOiI1Yzc4OTI1My1jMzQ3LTRkY2ItYmI0Ni0xYWMxNmQwOGYyMzYiLCJleHAiOjE3ODcwOTAyNTUsInVzZXJfY2xhaW1zIjp7ImFkbWluX3RlbXBfcGFzc3dvcmQiOjAsInN1YiI6ImI2NTliODk1LThkYzEtY2RmYy1kMzc5LWExNzdkYmQ5MmFkNiIsImxvZ2dlZF9pbl93aXRoIjoiZW1haWwiLCJoYXNfZW1haWwiOjEsImhhc19tb2JpbGUiOjAsImVtYWlsX3ZlcmlmaWVkIjoxLCJtb2JpbGVfdmVyaWZpZWQiOjAsInZlcmlmaWNhdGlvbl9yZXF1aXJlZCI6MSwidGVtcF9wYXNzd29yZCI6MCwidGVtcF9wYXNzd29yZF9yZXF1aXJlZCI6MH19.oIj4Dl6r4DerTaIPqnr4s_6f9fUl7Ga559v30fHTaj8";
+const PARENT_UUID = "33c9bb00-81bc-4313-9fe1-c2f0a68b2e7f";
+
+const COMMON_HEADERS = {
+  "accept": "application/json, text/plain, */*",
+  "authorization": SNAPFIX_TOKEN,
+  "content-type": "application/json",
+  "parent-uuid": PARENT_UUID
+};
+
+const WORKERS = [
+  "Wilford", "Marvin", "Jostyn", "Domingo", "Lloyd",
+  "Gerard", "Tommy", "Victor", "Nathaniel"
+];
+
+const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
+
+let loadedTickets = [];
+let currentSchedule = null;
+
+function buildSearchUrl(limit = 100, offset = 1) {
+  return `https://z4.snapfix.com/v1/app/tasks/list-by-parent?parentUuid=${PARENT_UUID}&limit=${limit}&offset=${offset}&sortBy=lastActivity&orderBy=desc`;
+}
+
+async function fetchStatusPage(color, offset = 1, limit = 100) {
+  const response = await fetch(buildSearchUrl(limit, offset), {
+    method: "POST",
+    headers: COMMON_HEADERS,
+    body: JSON.stringify({
+      searchText: "SN7",
+      normalTasks: 1,
+      colors: [color]
+    })
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    console.error("Snapfix request failed", {
+      status: response.status,
+      color,
+      offset,
+      response: text
+    });
+    throw new Error(`${response.status} - ${text}`);
+  }
+
+  const data = await response.json();
+  return data?.data?.jobs || [];
+}
+
+async function fetchAllOpenTickets() {
+  const all = [];
+
+  for (const color of ["red", "amber"]) {
+    let offset = 1;
+
+    while (true) {
+      const jobs = await fetchStatusPage(color, offset, 100);
+
+      jobs.forEach(job => all.push({ ...job, dispatcherColor: color }));
+
+      if (jobs.length < 100) break;
+      offset += 1;
+      if (offset > 50) break;
+    }
+  }
+
+  const seen = new Set();
+
+  return all.filter(ticket => {
+    const key = ticket.uuid || `${ticket.reference}-${ticket.createdTs}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function getCreatedDate(ticket) {
+  const d = new Date(Number(ticket.createdTs));
+  return isNaN(d.getTime()) ? null : d;
+}
+
+function ageInDays(ticket) {
+  const created = getCreatedDate(ticket);
+  if (!created) return 0;
+  return Math.floor((Date.now() - created.getTime()) / 86400000);
+}
+
+function formatDate(ticket) {
+  const d = getCreatedDate(ticket);
+  return d ? d.toLocaleDateString("en-US", { month:"short", day:"2-digit", year:"numeric" }) : "-";
+}
+
+function clean(v) { return v || "-"; }
+
+function ticketText(ticket) {
+  return [ticket.title, ticket.largeTitle, ticket.description].filter(Boolean).join(" ");
+}
+
+function normalizeAddress(text) {
+  return String(text || "")
+    .toLowerCase()
+    .replace(/\b(avenue|ave\.)\b/g, "ave")
+    .replace(/\b(street|st\.)\b/g, "st")
+    .replace(/\b(road|rd\.)\b/g, "rd")
+    .replace(/\b(boulevard|blvd\.)\b/g, "blvd")
+    .replace(/\b(place|pl\.)\b/g, "pl")
+    .replace(/\b(apartment|apt|unit)\s*[a-z0-9-]*/g, "")
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function addressRegionKey(ticket) {
+  const text = normalizeAddress(ticketText(ticket));
+  const match = text.match(/\b(\d{2,5})\s+([a-z0-9 ]+?\b(?:st|ave|rd|blvd|pl))\b/);
+
+  if (!match) return text.split(" ").slice(0, 4).join(" ");
+
+  const houseNumber = Number(match[1]);
+  const block = Math.floor(houseNumber / 100) * 100;
+  return `${block} ${match[2].trim()}`;
+}
+
+function getLatLng(ticket) {
+  const lat = Number(ticket.latitude ?? ticket.lat ?? ticket.location?.latitude ?? ticket.location?.lat);
+  const lng = Number(ticket.longitude ?? ticket.lng ?? ticket.lon ?? ticket.location?.longitude ?? ticket.location?.lng);
+  return Number.isFinite(lat) && Number.isFinite(lng) ? { lat, lng } : null;
+}
+
+function milesBetween(a, b) {
+  const R = 3958.8;
+  const toRad = d => d * Math.PI / 180;
+  const dLat = toRad(b.lat - a.lat);
+  const dLon = toRad(b.lng - a.lng);
+  const lat1 = toRad(a.lat);
+  const lat2 = toRad(b.lat);
+
+  const h = Math.sin(dLat/2)**2 +
+    Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon/2)**2;
+
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+function areNeighbors(a, b, mode, radius) {
+  if (mode === "off") return false;
+
+  if (mode === "geo") {
+    const p1 = getLatLng(a);
+    const p2 = getLatLng(b);
+    if (p1 && p2) return milesBetween(p1, p2) <= radius;
+  }
+
+  return addressRegionKey(a) === addressRegionKey(b);
+}
+
+function emptySchedule() {
+  const schedule = {};
+  WORKERS.forEach(worker => {
+    schedule[worker] = {};
+    DAYS.forEach(day => schedule[worker][day] = []);
+  });
+  return schedule;
+}
+
+function workerTickets(schedule, worker) {
+  return DAYS.flatMap(day => schedule[worker][day]);
+}
+
+function leastLoadedDay(schedule, worker) {
+  return [...DAYS].sort((a,b) => schedule[worker][a].length - schedule[worker][b].length)[0];
+}
+
+function assign(schedule, worker, ticket, allocationType) {
+  const day = leastLoadedDay(schedule, worker);
+  schedule[worker][day].push({ ...ticket, allocationType });
+}
+
+function dispatchTickets(tickets) {
+  const oldPerWorker = Number(document.getElementById("oldPerWorker").value);
+  const newPerWorker = Number(document.getElementById("newPerWorker").value);
+  const threshold = Number(document.getElementById("oldThreshold").value);
+  const neighborMode = document.getElementById("neighborMode").value;
+  const radius = Number(document.getElementById("neighborRadius").value);
+
+  const schedule = emptySchedule();
+
+  const oldestFirst = [...tickets].sort((a,b) =>
+    (getCreatedDate(a)?.getTime() || 0) - (getCreatedDate(b)?.getTime() || 0)
+  );
+
+  const oldPool = oldestFirst.filter(t => ageInDays(t) >= threshold);
+  const newerPool = oldestFirst
+    .filter(t => ageInDays(t) < threshold)
+    .sort((a,b) => (getCreatedDate(b)?.getTime() || 0) - (getCreatedDate(a)?.getTime() || 0));
+
+  let index = 0;
+
+  for (let round = 0; round < oldPerWorker; round++) {
+    for (const worker of WORKERS) {
+      if (index >= oldPool.length) break;
+      assign(schedule, worker, oldPool[index++], "oldest");
+    }
+  }
+
+  index = 0;
+
+  for (let round = 0; round < newPerWorker; round++) {
+    for (const worker of WORKERS) {
+      if (index >= newerPool.length) break;
+      assign(schedule, worker, newerPool[index++], "newer");
+    }
+  }
+
+  const assigned = new Set(
+    WORKERS.flatMap(w => workerTickets(schedule, w).map(t => t.uuid))
+  );
+
+  const remaining = oldestFirst.filter(t => !assigned.has(t.uuid));
+
+  if (neighborMode !== "off") {
+    for (const worker of WORKERS) {
+      const existing = workerTickets(schedule, worker);
+      let foundIndex = -1;
+
+      for (const anchor of existing) {
+        foundIndex = remaining.findIndex(candidate =>
+          areNeighbors(anchor, candidate, neighborMode, radius)
+        );
+        if (foundIndex >= 0) break;
+      }
+
+      if (foundIndex >= 0) {
+        const [neighbor] = remaining.splice(foundIndex, 1);
+        assign(schedule, worker, neighbor, "neighbor");
+      }
+    }
+  }
+
+  return { schedule, remaining };
+}
+
+function renderTicket(ticket) {
+  const badge =
+    ticket.allocationType === "oldest"
+      ? '<span class="badge oldest">Oldest Priority</span>'
+      : ticket.allocationType === "newer"
+      ? '<span class="badge newer">Newer Ticket</span>'
+      : '<span class="badge neighbor">Nearby Add-on</span>';
+
+  return `
+    <div class="ticket ${ticket.dispatcherColor === "amber" ? "amber" : "red"}">
+      <div class="top">
+        <span>${clean(ticket.reference)}</span>
+        <span>${ageInDays(ticket)}d</span>
+      </div>
+      <div class="title">${clean(ticket.largeTitle || ticket.title)}</div>
+      <div class="meta">
+        Created: ${formatDate(ticket)}<br>
+        Status: ${ticket.dispatcherColor === "red" ? "Red" : "Yellow"}<br>
+        Region: ${clean(addressRegionKey(ticket))}
+      </div>
+      ${badge}
+    </div>
+  `;
+}
+
+function renderBoard(result) {
+  let html = `<table><thead><tr><th>Maintenance Worker</th>${DAYS.map(d => `<th>${d}</th>`).join("")}</tr></thead><tbody>`;
+
+  for (const worker of WORKERS) {
+    html += `<tr><td class="worker">${worker}</td>`;
+
+    for (const day of DAYS) {
+      const tickets = result.schedule[worker][day];
+      html += `<td>${tickets.length ? tickets.map(renderTicket).join("") : '<div class="empty">No tickets assigned</div>'}</td>`;
+    }
+
+    html += `</tr>`;
+  }
+
+  html += `</tbody></table>`;
+  document.getElementById("board").innerHTML = html;
+}
+
+function renderStats(result) {
+  const assigned = WORKERS.flatMap(w => workerTickets(result.schedule, w));
+
+  document.getElementById("stats").innerHTML = `
+    <div class="stats">
+      <div class="stat"><div class="label">Open Red / Yellow</div><div class="value">${loadedTickets.length}</div></div>
+      <div class="stat"><div class="label">Assigned This Week</div><div class="value">${assigned.length}</div></div>
+      <div class="stat"><div class="label">Old Priority</div><div class="value">${assigned.filter(t => t.allocationType === "oldest").length}</div></div>
+      <div class="stat"><div class="label">Newer Tickets</div><div class="value">${assigned.filter(t => t.allocationType === "newer").length}</div></div>
+      <div class="stat"><div class="label">Nearby Add-ons</div><div class="value">${assigned.filter(t => t.allocationType === "neighbor").length}</div></div>
+    </div>
+  `;
+}
+
+async function loadAndDispatch() {
+  const loading = document.getElementById("loading");
+  loading.innerHTML = '<div class="loading">Loading red and yellow Snapfix tickets...</div>';
+
+  try {
+    loadedTickets = await fetchAllOpenTickets();
+
+    if (!loadedTickets.length) {
+      loading.innerHTML = '<div class="loading">No open red/yellow tickets found.</div>';
+      return;
+    }
+
+    currentSchedule = dispatchTickets(loadedTickets);
+    loading.innerHTML = "";
+    renderStats(currentSchedule);
+    renderBoard(currentSchedule);
+  } catch (error) {
+    console.error(error);
+    loading.innerHTML = `<div class="loading">Error: ${error.message}</div>`;
+  }
+}
+
+function redispatchCurrent() {
+  if (!loadedTickets.length) {
+    alert("Load Snapfix tickets first.");
+    return;
+  }
+
+  currentSchedule = dispatchTickets(loadedTickets);
+  renderStats(currentSchedule);
+  renderBoard(currentSchedule);
+}
+</script>
+</body>
+</html>
